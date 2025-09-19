@@ -3,13 +3,12 @@ import requests
 import time
 import pandas as pd
 from colorama import init, Fore, Back, Style
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 
 init(autoreset=True)
 headers = {"User-Agent" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"}
 
 base_main_url = "https://nyaa.si"
-base_view_url = "https://nyaa.si/view/2021023"
-base_user_url = "https://nyaa.si/user/Last_Order"
 
 def test_connection_to_webpage(url="https://nyaa.si/user/1_Hong?p=100"):
     r = requests.get(url,headers=headers)
@@ -158,5 +157,39 @@ def scrape_index_page(base_url="https://nyaa.si/?p=", page_traversed=5):
 def line_print(bg_color, text,end='\n\n'):
     print(bg_color + Style.BRIGHT  + text, end=end)
 
+def generate_nyaa_url(query=None,page=1,filter=None,category=None):
+    # url = "https://nyaa.si/?f=2&c=1_0&q="
+
+    scheme = 'https'
+    netloc = 'nyaa.si'
+    path = '/'
+
+    query_dict = {}
+    query_dict['p'] = [str(page)]
+    if query is not None:
+        query_dict['q'] = [query]
+    if filter is not None:
+        query_dict['f'] = [str(filter)]
+    if category is not None:
+        query_dict['c'] = [str(category)]
+
+    new_query = urlencode(query_dict, doseq=True)
+
+    new_url = urlunparse((scheme, netloc, path, '', new_query, ''))
+
+    return new_url
+
+def scrape_nyaa_with_query(query=None,filter=None,category=None,page_traverse = 3):
+    flatened_data = []
+    for i in range(1,page_traverse+1):
+        nyaa_url = generate_nyaa_url(query=query, filter=filter, page=i, category=category)
+        page_html = get_html_content(nyaa_url)
+        table_row_elements = get_rows_element(page_html, 'tbody tr')
+        flatened_data += get_data_from_table_rows(table_row_elements)
+        line_print(Back.GREEN,f"{nyaa_url} data successfully scraped")
+        time.sleep(1)
+    df = pd.DataFrame(flatened_data)
+    print(df.head(100))
+
 if __name__ == "__main__":
-    scrape_index_page()
+    scrape_nyaa_with_query("bocchi the rock", 0, '1_2')
