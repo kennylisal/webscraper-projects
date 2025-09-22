@@ -255,7 +255,8 @@ def extract_nyaa_page_data(html,page_url):
     if get_url_path(page_url,0) is '/' or '/user':
         return extract_nyaa_table_info(html)
     elif get_url_path(page_url,0) is '/view':
-        get_user_link_from_view(html)
+        return get_user_link_from_view(html)
+    line_print(Back.YELLOW, f"path outside of scope encountered, url : {page_url}")
     return None
 
 
@@ -279,6 +280,7 @@ class AsyncCrawler:
     async def add_page_visit(self,url_destination):
         async with self.lock:
             if url_destination in self.page_data:
+                line_print(Back.RED, f"url {url_destination} is already on page_data, Skipped!")
                 return False
             self.page_data[url_destination] = None
             return True
@@ -306,6 +308,7 @@ class AsyncCrawler:
         async with self.semaphore:
             html = await self.get_html(destination_url)
             if html is None:
+                line_print(Back.RED, f"failed to fetch html content, url : {destination_url}")
                 async with self.lock:
                     del self.page_data[destination_url]
                 return
@@ -316,11 +319,12 @@ class AsyncCrawler:
             return
 
         if get_url_path(destination_url,segment=0) is '/view':
+            
             user_path = page_info
             user_url = generate_nyaa_url(user_path)
+            print(Fore.GREEN, f"Continuing from {destination_url} to {user_url}",end='\n')
+            line_print(Back.GREEN, f"added task to crawl {user_url}")
             await self.crawl_page(user_url)
-            # new_task = asyncio.create_task(self.crawl_page(user_url))
-            # await asyncio.gather(new_task)
         else: #this is for '/user' and '/'
             async with self.lock:
                 nyaa_path = get_url_path(destination_url)
@@ -330,10 +334,12 @@ class AsyncCrawler:
 
             tasks = []
             for url in new_urls:
+                line_print(Back.GREEN, f"adding task to crawl link from {destination_url}")
                 if generate_nyaa_url() == self.base_url:
                     task = asyncio.create_task(self.crawl_page(url))
                     tasks.append(task)
-            
+                    print(Fore.GREEN, f"Added task to crawl {url}",end='\n')
+ 
             await asyncio.gather(*tasks)
 
     async def crawl(self):
@@ -343,6 +349,7 @@ class AsyncCrawler:
 
 async def crawl_site_async(base_url):
     async with AsyncCrawler(base_url,max_concurrency=2) as crawler:
+        line_print(Back.GREEN, f"Starting webcrawling with base url : {base_url}")
         page_data = await crawler.crawl()
         return page_data
 
