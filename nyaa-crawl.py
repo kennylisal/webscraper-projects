@@ -4,6 +4,8 @@ import time
 import pandas as pd
 from colorama import init, Fore, Back, Style
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+import asyncio
+import aiohttp
 
 init(autoreset=True)
 headers = {"User-Agent" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"}
@@ -47,18 +49,10 @@ def get_rows_element(html,selector):
     table_rows = content_element
     return table_rows
 
-def get_submitter_info_from_view(html):
-    try:
-        soup = BeautifulSoup(html, 'lxml')
-        submitter_element = soup.select('div.row') # type: ignore
-        a_element = submitter_element[1].find('a')
-        return a_element
-    except Exception as e:
-        print(Fore.RED+str(e))
-        return None
+
         
 
-def get_data_from_table_rows(page_row_elements):
+def extract_nyaa_table_data(page_row_elements):
     data_collection = []
     for rows in page_row_elements:
         cells = rows.select('td')
@@ -89,7 +83,7 @@ def scrape_user_page_data(base_url,user_url,depth,user_page_data,error_arr):
             error_arr.append(f"No rows on index page {user_page_url}")
             continue 
     
-        user_page_data[user_url] += get_data_from_table_rows(user_page_row_elements)
+        user_page_data[user_url] += extract_nyaa_table_data(user_page_row_elements)
         print(f"{user_page_url} Data Gathered", end='\n\n')
         # print(len(user_page_data[user_url]))
         time.sleep(1)
@@ -142,13 +136,15 @@ def scrape_nyaa_user_data(base_url="https://nyaa.si", index_page_traversed_depth
     
     return user_page_data
 
+
+
 #gather all entry on index and info from its /view
 def scrape_index_page(base_url="https://nyaa.si/?p=", page_traversed=5):
     flatened_data = []
     for i in range(1,page_traversed+1):
         main_page_html = get_html_content(f"{base_url}{i}")
         table_row_elements = get_rows_element(main_page_html,'tbody tr')
-        flatened_data += get_data_from_table_rows(table_row_elements)
+        flatened_data += extract_nyaa_table_data(table_row_elements)
         line_print(Back.GREEN,f"{base_url}{i} data successfully scraped")
         time.sleep(1)
     df = pd.DataFrame(flatened_data)
@@ -157,15 +153,20 @@ def scrape_index_page(base_url="https://nyaa.si/?p=", page_traversed=5):
 def line_print(bg_color, text,end='\n\n'):
     print(bg_color + Style.BRIGHT  + text, end=end)
 
-def generate_nyaa_url(query=None,page=1,filter=None,category=None):
+def generate_nyaa_url(query=None,page=None,filter=None,category=None,path=None):
     # url = "https://nyaa.si/?f=2&c=1_0&q="
 
     scheme = 'https'
     netloc = 'nyaa.si'
+
+
     path = '/'
+    if path is not None:
+        path = path
 
     query_dict = {}
-    query_dict['p'] = [str(page)]
+    if page is not None:
+        query_dict['p'] = [str(page)]
     if query is not None:
         query_dict['q'] = [query]
     if filter is not None:
@@ -179,17 +180,179 @@ def generate_nyaa_url(query=None,page=1,filter=None,category=None):
 
     return new_url
 
+def get_url_path(url, segment = None):
+    # Parse the URL
+    parsed_url = urlparse(url)
+    # Get the path component
+    path = parsed_url.path
+    if segment is None:
+        return path
+    else:
+        segments = [segment for segment in path.split('/') if segment]
+        return f"/{segments[segment]}"
+    # Split the path into segments and take the first non-empty segment
+    # segments = [segment for segment in path.split('/') if segment]
+    # If there’s at least one segment, return the first one with a leading '/'
+    # return f"/{segments[0]}" if segments else '/'
+    
+
 def scrape_nyaa_with_query(query=None,filter=None,category=None,page_traverse = 3):
     flatened_data = []
     for i in range(1,page_traverse+1):
         nyaa_url = generate_nyaa_url(query=query, filter=filter, page=i, category=category)
         page_html = get_html_content(nyaa_url)
         table_row_elements = get_rows_element(page_html, 'tbody tr')
-        flatened_data += get_data_from_table_rows(table_row_elements)
+        flatened_data += extract_nyaa_table_data(table_row_elements)
         line_print(Back.GREEN,f"{nyaa_url} data successfully scraped")
         time.sleep(1)
     df = pd.DataFrame(flatened_data)
     print(df.head(100))
 
+
+def extract_nyaa_table_info(html):
+    soup = BeautifulSoup(html,'lxml')
+    content_element = soup.select('tbody tr')
+    if content_element == None:
+        line_print(Back.RED,"Data Element is not rendered")
+        return None
+    table_rows = content_element
+    #
+    data_collection = []
+    for row in table_rows:
+        cells = row.select('td')
+        temp_data = {
+            'category' : cells[0].find('a').get('title'), # type: ignore
+            'name' : cells[1].get_text(strip=True),
+            'link' : cells[1].find('a').get('href'), # type: ignore
+            'magnet_link' : cells[2].find_all('a')[1].get('href'), # type: ignore
+            'size' : cells[3].get_text(strip=True),
+            'date' : cells[4].get_text(strip=True)
+        }
+        data_collection.append(temp_data)
+    return data_collection
+
+def get_submitter_info_from_view(html):
+    try:
+        soup = BeautifulSoup(html, 'lxml')
+        submitter_element = soup.select('div.row') # type: ignore
+        a_element = submitter_element[1].find('a')
+        return a_element
+    except Exception as e:
+        print(Fore.RED+str(e))
+        return None
+
+def get_user_link_from_view(html):
+    submitter = get_submitter_info_from_view(html)
+    if submitter is None:
+        line_print(Back.BLUE, "submitter is Anonymous, Skipped")
+        return None
+    submitter_url = submitter.get("href") # type: ignore
+    return submitter_url
+
+    
+def extract_nyaa_page_data(html,page_url):
+    #kembalikan data -> sesuai jika dia index, /user, /view
+    if get_url_path(page_url,0) is '/' or '/user':
+        return extract_nyaa_table_info(html)
+    elif get_url_path(page_url,0) is '/view':
+        get_user_link_from_view(html)
+    return None
+
+
+class AsyncCrawler:
+    def __init__(self, base_url, max_concurrency = 5) -> None:
+        self.base_url = base_url
+        self.page_data = {}
+        self.lock = asyncio.Lock()
+        self.max_concurrency = max_concurrency
+        self.semaphore = asyncio.Semaphore(max_concurrency)
+        self.session = None
+
+    async def __aenter__ (self):
+        self.session = aiohttp.ClientSession()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.session is not None:
+            await self.session.close()
+    
+    async def add_page_visit(self,url_destination):
+        async with self.lock:
+            if url_destination in self.page_data:
+                return False
+            self.page_data[url_destination] = None
+            return True
+
+    async def get_html(self,url):
+        try:
+            async with self.session.get(url) as response: # type: ignore
+                if response.status != 200:
+                    print(f"Error: Status {response.status} for {url}")
+                    return None
+                if 'text/html' not in response.headers.get('Content-Type', ''):
+                    print(f"Non-HTML content for {url}")
+                    return None
+                return await response.text()   
+        except aiohttp.ClientError as e:
+                print(f"Error fetching {url}: {e}")
+                return None
+    
+    async def crawl_page(self,destination_url):
+        is_new = await self.add_page_visit(destination_url)
+        if not is_new:
+            return
+        
+        #limit concurency
+        async with self.semaphore:
+            html = await self.get_html(destination_url)
+            if html is None:
+                async with self.lock:
+                    del self.page_data[destination_url]
+                return
+        
+        # page_info -> isinya link yang mau dikunjungi
+        page_info = extract_nyaa_page_data(html,destination_url)
+        if page_info is None:
+            return
+
+        if get_url_path(destination_url,segment=0) is '/view':
+            user_path = page_info
+            user_url = generate_nyaa_url(user_path)
+            await self.crawl_page(user_url)
+            # new_task = asyncio.create_task(self.crawl_page(user_url))
+            # await asyncio.gather(new_task)
+        else: #this is for '/user' and '/'
+            async with self.lock:
+                nyaa_path = get_url_path(destination_url)
+                self.page_data[nyaa_path] = page_info
+
+            new_urls = page_info
+
+            tasks = []
+            for url in new_urls:
+                if generate_nyaa_url() == self.base_url:
+                    task = asyncio.create_task(self.crawl_page(url))
+                    tasks.append(task)
+            
+            await asyncio.gather(*tasks)
+
+    async def crawl(self):
+        await self.crawl_page(self.base_url)
+        return self.page_data
+
+
+async def crawl_site_async(base_url):
+    async with AsyncCrawler(base_url,max_concurrency=2) as crawler:
+        page_data = await crawler.crawl()
+        return page_data
+
+async def main_async_crawl():
+    base_url = ""
+    page_datas = await crawl_site_async(base_url)
+
+    for page in page_datas.values():
+        print(page['url'])
+
+
 if __name__ == "__main__":
-    scrape_nyaa_with_query("bocchi the rock", 0, '1_2')
+    print(get_url_path("https://nyaa.si/view/1234234"))
