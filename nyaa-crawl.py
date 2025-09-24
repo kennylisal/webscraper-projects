@@ -6,6 +6,7 @@ from colorama import init, Fore, Back, Style
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 import asyncio
 import aiohttp
+import nyaa_csv_report 
 
 init(autoreset=True)
 headers = {"User-Agent" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"}
@@ -220,13 +221,7 @@ def get_url_path(url, segment = None):
     except Exception:
         line_print(Back.RED , f"url is {url}")
         return False
-
-    # Split the path into segments and take the first non-empty segment
-    # segments = [segment for segment in path.split('/') if segment]
-    # If there’s at least one segment, return the first one with a leading '/'
-    # return f"/{segments[0]}" if segments else '/'
     
-
 def scrape_nyaa_with_query(query=None,filter=None,category=None,page_traverse = 3):
     flatened_data = []
     for i in range(1,page_traverse+1):
@@ -239,6 +234,12 @@ def scrape_nyaa_with_query(query=None,filter=None,category=None,page_traverse = 
     df = pd.DataFrame(flatened_data)
     print(df.head(100))
 
+def safe_parse_int(value):
+    try:
+        res = int(value)
+        return res
+    except:
+        return 0
 
 def extract_nyaa_table_info(html):
     soup = BeautifulSoup(html,'lxml')
@@ -253,11 +254,14 @@ def extract_nyaa_table_info(html):
         cells = row.select('td')
         temp_data = {
             'category' : cells[0].find('a').get('title'), # type: ignore
-            'name' : cells[1].get_text(strip=True),
+            'file_name' : cells[1].get_text(strip=True),
             'link' : cells[1].find('a').get('href'), # type: ignore
             'magnet_link' : cells[2].find_all('a')[1].get('href'), # type: ignore
             'size' : cells[3].get_text(strip=True),
-            'date' : cells[4].get_text(strip=True)
+            'date' : cells[4].get_text(strip=True),
+            'seeders' : safe_parse_int(cells[5].get_text(strip=True)),
+            'leechers' : safe_parse_int(cells[6].get_text(strip=True)),
+            'completed_download' : safe_parse_int(cells[7].get_text(strip=True))
         }
         data_collection.append(temp_data)
     return data_collection
@@ -368,15 +372,12 @@ class AsyncCrawler:
                 nyaa_path = url_to_crawl
                 self.page_data[nyaa_path] = page_info
 
-                # print(self.page_data)
-                # disini keknya tentukan mau ambil data apa saja
             new_urls = []
             for item in page_info:
                 try:
                     new_urls.append(item['link']) # type: ignore
                 except:
                     continue
-
 
             tasks = []
             line_print(Back.GREEN, f"adding task to crawl links from {url_to_crawl}")
@@ -389,7 +390,6 @@ class AsyncCrawler:
                     ctr +=1
                     if(ctr > 6):
                         break
-                    # print(Fore.GREEN, f"Added task to crawl {url}",end='\n')                    
 
             next_page_url = add_next_page_url(self.base_url, self.max_page)
 
@@ -401,7 +401,6 @@ class AsyncCrawler:
             print(Fore.GREEN + f"Added {len(tasks)} url to crawl")
             await asyncio.gather(*tasks)
         elif get_url_path(url_to_crawl,segment=0) == '/view':
-
             user_path = page_info
             user_url = generate_nyaa_url(path=user_path) # type: ignore
             print(Fore.GREEN, f"Continuing from {url_to_crawl} to {user_url}",end='\n')
@@ -437,11 +436,15 @@ async def main_async_crawl():
     base_url = "https://nyaa.si"
     page_datas = await crawl_site_async(base_url)
 
-    for key,values in page_datas.items():
-        line_print(Back.BLUE,key,end='\n')
-        for value in values:
-            print(value)
-        print()
+    nyaa_csv_report.write_csv_report(page_datas,"nyaa-report-v2.csv")
+
+    # for key,values in page_datas.items():
+    #     line_print(Back.BLUE,key,end='\n')
+    #     for value in values:
+    #         print(value)
+    #     print()
+
+
 
 if __name__ == "__main__":
     asyncio.run(main_async_crawl())
