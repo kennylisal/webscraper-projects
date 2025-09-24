@@ -302,7 +302,7 @@ class AsyncCrawler:
         self.errors = []
         self.max_page = max_page_traverse
     async def __aenter__ (self):
-        self.session = aiohttp.ClientSession()
+        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -314,7 +314,6 @@ class AsyncCrawler:
             return True
         async with self.lock:
             if url_destination in self.page_data:
-                # line_print(Back.RED, f"url {url_destination} is already on page_data, Skipped!")
                 self.errors.append(f"url {url_destination} is already on page_data, Skipped!")
                 return False
             print(Fore.GREEN + f"added to page_data {url_destination}")
@@ -322,7 +321,7 @@ class AsyncCrawler:
             return True
 
     async def get_html(self,url):
-        time.sleep(0.4)
+        # await asyncio.sleep(0.4)
         try:
             async with self.session.get(url) as response: # type: ignore
                 if response.status != 200:
@@ -342,6 +341,7 @@ class AsyncCrawler:
         
     
     async def crawl_page(self,url_to_crawl):
+        line_print(Back.BLUE, f"start crawling for {url_to_crawl}")
         is_new = await self.add_page_visit(url_to_crawl)
         if not is_new:
             return
@@ -370,48 +370,52 @@ class AsyncCrawler:
 
                 # print(self.page_data)
                 # disini keknya tentukan mau ambil data apa saja
-                new_urls = []
-                for item in page_info:
-                    try:
-                        new_urls.append(item['link']) # type: ignore
-                    except:
-                        continue
+            new_urls = []
+            for item in page_info:
+                try:
+                    new_urls.append(item['link']) # type: ignore
+                except:
+                    continue
 
 
-                tasks = []
-                line_print(Back.GREEN, f"adding task to crawl links from {url_to_crawl}")
-                for url in new_urls:
-                    if generate_nyaa_url() == self.base_url:
-                        view_url = generate_nyaa_url(path=url)
-                        task = asyncio.create_task(self.crawl_page(view_url))
-                        tasks.append(task)
-                        # print(Fore.GREEN, f"Added task to crawl {url}",end='\n')                    
+            tasks = []
+            line_print(Back.GREEN, f"adding task to crawl links from {url_to_crawl}")
+            ctr = 0
+            for url in new_urls:
+                if generate_nyaa_url() == self.base_url:
+                    view_url = generate_nyaa_url(path=url)
+                    task = asyncio.create_task(self.crawl_page(view_url))
+                    tasks.append(task)
+                    ctr +=1
+                    if(ctr > 6):
+                        break
+                    # print(Fore.GREEN, f"Added task to crawl {url}",end='\n')                    
 
-                next_page_url = add_next_page_url(self.base_url, self.max_page)
+            next_page_url = add_next_page_url(self.base_url, self.max_page)
 
-                if not next_page_url:
-                    next_page_task = asyncio.create_task(self.crawl_page(next_page_url))
-                    tasks.append(next_page_task)
-                    print(Fore.GREEN, f"Added task to crawl {next_page_task}",end='\n')   
+            if next_page_url:
+                next_page_task = asyncio.create_task(self.crawl_page(next_page_url))
+                tasks.append(next_page_task)
+                print(Fore.GREEN, f"Added task to crawl {next_page_task}",end='\n')   
 
-                print(Fore.GREEN + f"Added {len(tasks)} url to crawl")
-                await asyncio.gather(*tasks)
+            print(Fore.GREEN + f"Added {len(tasks)} url to crawl")
+            await asyncio.gather(*tasks)
         elif get_url_path(url_to_crawl,segment=0) == '/view':
-            # print(Fore.GREEN + f"processing data from {get_url_path(url_to_crawl)}")
+
             user_path = page_info
             user_url = generate_nyaa_url(path=user_path) # type: ignore
             print(Fore.GREEN, f"Continuing from {url_to_crawl} to {user_url}",end='\n')
             line_print(Back.GREEN, f"added task to crawl {user_url}")
-            await self.crawl_page(user_url)
+            await asyncio.gather(*[asyncio.create_task(self.crawl_page(user_url))])
         elif get_url_path(url_to_crawl,segment=0) == '/user': #this is for '/user'
             async with self.lock:
                 nyaa_path = url_to_crawl
                 self.page_data[nyaa_path] = page_info
-                next_page_url = add_next_page_url(url_to_crawl, self.max_page)
-                if not next_page_url:                    
-                    print(Fore.GREEN, f"Continuing from {url_to_crawl} to {next_page_url}",end='\n')
-                    line_print(Back.GREEN, f"added task to crawl {next_page_url}")
-                    await self.crawl_page(next_page_url)
+            next_page_url = add_next_page_url(url_to_crawl, self.max_page)
+            if next_page_url:                    
+                print(Fore.GREEN, f"Continuing from {url_to_crawl} to {next_page_url}",end='\n')
+                line_print(Back.GREEN, f"added task to crawl {next_page_url}")
+                await asyncio.gather(*[asyncio.create_task(self.crawl_page(next_page_url))])
 
     async def crawl(self):
         await self.crawl_page(self.base_url)
@@ -441,6 +445,3 @@ async def main_async_crawl():
 
 if __name__ == "__main__":
     asyncio.run(main_async_crawl())
-    # print(add_url_next_page("https://nyaa.si/?f=0&c=1_2&q=&p=2",2))
-    # print(generate_nyaa_url(path='/view/2023013'))
-    # print(get_url_path("https://nyaa.si/?f=0&c=1_2&q=&p=2"))
