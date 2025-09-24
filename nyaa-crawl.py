@@ -174,7 +174,7 @@ def generate_nyaa_url(query=None,page=None,filter=None,category=None,path=''):
 
     return new_url
 
-def add_next_page_url(url, max_page):
+def add_next_page_url(url, max_page, page=None):
     # Parse the URL into components
     parsed_url = urlparse(url)
     
@@ -186,8 +186,12 @@ def add_next_page_url(url, max_page):
     if current_page >= max_page:
         return None
 
-    # Increment page number
-    query_dict['p'] = [str(current_page + 1)]
+    if page:
+        query_dict['p'] = [page]
+    else: 
+        query_dict['p'] = [str(current_page + 1)]
+
+    
     
     # Encode the updated query parameters
     new_query = urlencode(query_dict, doseq=True)
@@ -243,6 +247,10 @@ def safe_parse_int(value):
 
 def extract_nyaa_table_info(html):
     soup = BeautifulSoup(html,'lxml')
+    #check if no result first
+    if soup.find('h3',string='No results found'):
+        return None
+    # 
     content_element = soup.select('tbody tr')
     if content_element == None:
         line_print(Back.RED,"Data Element is not rendered")
@@ -295,8 +303,9 @@ def extract_nyaa_page_data(html,page_url):
     return None
 
 
+
 class AsyncCrawler:
-    def __init__(self, base_url, max_concurrency = 5, max_page_traverse = 1) -> None:
+    def __init__(self, base_url, max_concurrency = 5, max_page_traverse = 3) -> None:
         self.base_url = base_url
         self.page_data = {}
         self.lock = asyncio.Lock()
@@ -305,6 +314,8 @@ class AsyncCrawler:
         self.session = None
         self.errors = []
         self.max_page = max_page_traverse
+        self.page_tasks = {}
+
     async def __aenter__ (self):
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
         return self
@@ -312,6 +323,65 @@ class AsyncCrawler:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.session is not None:
             await self.session.close()
+    
+    async def extract_table_page(self, url_to_crawl, page_num):
+        self.page_data[url_to_crawl] = None
+
+        async with self.semaphore:
+            html = await self. get_html(url_to_crawl)
+            if html is None:
+                self.errors.append(f"failed to fetch html content, url : {url_to_crawl}")
+                line_print(Back.RED, f"failed to fetch html content, url : {url_to_crawl}")
+                async with self.lock:
+                    del self.page_data[url_to_crawl]
+                return
+        
+        page_info = extract_nyaa_table_info(html)
+        if page_info is None:
+            # this mean all the available result are already traversed
+            # stop all the asyncio task
+            self.errors.append(f"There are no more page to crawl, last url to crawl : {url_to_crawl}")
+            async with self.lock:
+                for p, t in list(self.page_tasks.items()):
+                    if p > page_num and not t.done():
+                        t.cancel()
+            return
+        
+        async with self.lock:
+            self.page_data[url_to_crawl] = page_info
+
+    async def crawl_custom_query(self):
+        tasks = []
+        for i in range(1,self.max_page + 1):
+            url = add_next_page_url(self.base_url,self.max_page,i)
+            task = asyncio.create_task(self.extract_table_page(url, i))
+            self.page_tasks[i] = task
+            tasks.append(task)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return self.page_data
+
+    # async def get_html_with_stop(self,url):
+    #     await asyncio.sleep(0.2)
+    #     try:
+    #         async with self.session.get(url) as response: # type: ignore
+    #             print(response.status)
+    #             if response.status != 200:
+    #                 print(f"Error: Status {response.status} for {url}")
+    #                 self.errors.append(f"Error: Status {response.status} for {url}")
+    #                 return None
+    #             if 'text/html' not in response.headers.get('Content-Type', ''):
+    #                 print(f"Non-HTML content for {url}")
+    #                 self.errors.append(f"Non-HTML content for {url}")
+    #                 return None
+    #             return await response.text()   
+    #     except aiohttp.ClientError as e:
+    #             print(f"Error fetching {url}: {e}")
+    #             self.errors.append(f"Error fetching {url}: {e}")
+    #             return None
+
+    async def custom_crawl(self):
+        await self.crawl_custom_query()
+        return self.page_data
     
     async def add_page_visit(self,url_destination):
         if get_url_path(url_destination, 0) == '/view':
@@ -323,9 +393,9 @@ class AsyncCrawler:
             print(Fore.GREEN + f"added to page_data {url_destination}")
             self.page_data[url_destination] = None
             return True
-
+        
     async def get_html(self,url):
-        # await asyncio.sleep(0.4)
+        await asyncio.sleep(0.2)
         try:
             async with self.session.get(url) as response: # type: ignore
                 if response.status != 200:
@@ -341,9 +411,7 @@ class AsyncCrawler:
                 print(f"Error fetching {url}: {e}")
                 self.errors.append(f"Error fetching {url}: {e}")
                 return None
-
         
-    
     async def crawl_page(self,url_to_crawl):
         line_print(Back.BLUE, f"start crawling for {url_to_crawl}")
         is_new = await self.add_page_visit(url_to_crawl)
@@ -436,7 +504,7 @@ async def main_async_crawl():
     base_url = "https://nyaa.si"
     page_datas = await crawl_site_async(base_url)
 
-    nyaa_csv_report.write_csv_report(page_datas,"nyaa-report-v2.csv")
+    nyaa_csv_report.write_csv_report(page_datas,"nyaa-report.csv")
 
     # for key,values in page_datas.items():
     #     line_print(Back.BLUE,key,end='\n')
@@ -444,7 +512,27 @@ async def main_async_crawl():
     #         print(value)
     #     print()
 
+async def crawl_site_with_query(base_url):
+    async with AsyncCrawler(base_url,max_concurrency=2) as crawler:
+        line_print(Back.GREEN, f"Starting webcrawling with base url : {base_url}")
+        page_data = await crawler.crawl_custom_query()
+        # 
+        line_print(Back.RED , "Here are the error that occured during crawling : ")
+        for error in crawler.errors:
+            print(Fore.RED,error)
+        # 
+        return page_data
 
+async def custom_async_crawl():
+    base_url = "https://nyaa.si/?f=0&c=1_2&q=bocchi+the+rock"
+    page_datas = await crawl_site_with_query(base_url)
+
+    for key,values in page_datas.items():
+        line_print(Back.BLUE,key,end='\n')
+        for value in values:
+            print(value)
+        print()
 
 if __name__ == "__main__":
-    asyncio.run(main_async_crawl())
+    asyncio.run(custom_async_crawl())
+    # print(add_next_page_url("https://nyaa.si/?f=0&c=0_0&q=xcvdvdv", 5))
