@@ -1,155 +1,15 @@
 from bs4 import BeautifulSoup
-import requests
-import time
 import pandas as pd
 from colorama import init, Fore, Back, Style
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 import asyncio
 import aiohttp
 import nyaa_csv_report 
+import argparse
+import sys
+from datetime import datetime
 
 init(autoreset=True)
-headers = {"User-Agent" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"}
-
-base_main_url = "https://nyaa.si"
-
-def test_connection_to_webpage(url="https://nyaa.si/user/1_Hong?p=100"):
-    r = requests.get(url,headers=headers)
-    print(r.status_code)
-    if 200 <= r.status_code <300:
-        print("something")
-    soup = BeautifulSoup(r.content,'lxml')
-    print(soup.find('tbody'))
-
-def get_html_content(url, max_retries=5, retry_delay=6):
-    for attempt in range(max_retries):
-        try:
-            r = requests.get(url, headers=headers)
-            if 200 <= r.status_code <= 299:
-                print(Fore.GREEN + f"GET {url} | code: {r.status_code}", end='\n')
-                return r.content
-            else:
-                print(Fore.RED + f"{url} visit declined code: {r.status_code}")
-        except requests.RequestException as e:
-            print(Fore.RED + f"{url} request failed: {e}")
-        
-        if attempt < max_retries - 1:
-            print(Fore.YELLOW + f"Retrying ({attempt + 1}/{max_retries}) in {retry_delay} seconds...")
-            time.sleep(retry_delay)
-        else:
-            print(Fore.RED + f"Failed to fetch {url} after {max_retries} attempts")
-            return None
-    return None
-
-def get_rows_element(html,selector):
-    soup = BeautifulSoup(html,'lxml')
-    content_element = soup.select(selector)
-    if content_element == None:
-        line_print(Back.RED,"Data Element is not rendered")
-        return None
-    table_rows = content_element
-    return table_rows
-
-
-        
-
-def extract_nyaa_table_data(page_row_elements):
-    data_collection = []
-    for rows in page_row_elements:
-        cells = rows.select('td')
-        temp_data = {
-            'category' : cells[0].find('a').get('title'), # type: ignore
-            'name' : cells[1].get_text(strip=True),
-            'link' : cells[1].find('a').get('href'), # type: ignore
-            'magnet_link' : cells[2].find_all('a')[1].get('href'), # type: ignore
-            'size' : cells[3].get_text(strip=True),
-            'date' : cells[4].get_text(strip=True)
-        }
-        data_collection.append(temp_data)
-    return data_collection
-
-def scrape_user_page_data(base_url,user_url,depth,user_page_data,error_arr):
-    for j in range(1,depth+1):
-        user_page_url = f"{base_url}{user_url}?p={j}"
-        user_page_html = get_html_content(user_page_url) # type: ignore
-        if user_page_html is None:
-            line_print(Back.RED,f"Continue to page {j+1}, {user_url} html failed to fetch")
-            error_arr.append(f"Failed to fetch index page html |  {user_page_url}")
-            continue 
-
-        user_page_row_elements = get_rows_element(user_page_html, 'tbody tr')
-
-        if user_page_row_elements is None:
-            line_print(Back.RED,f"Continue to page {j+1}, Content Element failed to fetch")
-            error_arr.append(f"No rows on index page {user_page_url}")
-            continue 
-    
-        user_page_data[user_url] += extract_nyaa_table_data(user_page_row_elements)
-        print(f"{user_page_url} Data Gathered", end='\n\n')
-        # print(len(user_page_data[user_url]))
-        time.sleep(1)
-
-def scrape_nyaa_user_data(base_url="https://nyaa.si", index_page_traversed_depth=3,user_page_traverse_depth=3,user_page_data={}):
-    errors = []
-    for i in range(1,index_page_traversed_depth + 1):
-        page_query = f"/?p={i}"
-        main_page_html = get_html_content(base_url + page_query)
-        if main_page_html is None:
-            line_print(Back.RED,f"Continue to page {i+1}, index content Element failed to fetch")
-            errors.append(f"Failed to fetch index page html | {base_url + page_query}")
-            continue 
-
-        line_print(Back.GREEN,f"indexing from {base_url + page_query}")
-        table_row_elements = get_rows_element(main_page_html,'tbody tr')
-        if table_row_elements is None:
-            line_print(Back.RED,f"Continue to page {i+1}, Content Element failed to fetch")
-            errors.append(f"No rows on index page {base_url + page_query}")
-            continue 
-        #
-        #first iteration through index page table
-        for rows in table_row_elements:
-            cells = rows.select('td')
-            view_url = base_main_url + str(cells[1].find('a').get('href')) # type: ignore
-            view_html = get_html_content(view_url)
-            a_element = get_submitter_info_from_view(view_html)
-            if a_element is None:
-                line_print(Back.BLUE, "submitter is Anonymous, Skipped")
-                continue
-            # 
-            # Visit User page
-            user_url = a_element.get("href") # type: ignore
-            line_print(Back.YELLOW, f"Visiting User {user_url}")
-
-            if user_url in user_page_data:
-                line_print(Back.BLUE, f"{user_url} already exist on dictionary")
-                continue
-            #
-            # iterate through user page for links
-            user_page_data[user_url] = []
-            scrape_user_page_data(base_main_url,user_url,user_page_traverse_depth,user_page_data,errors)
-            time.sleep(1)
-        time.sleep(1)
-
-    if errors:
-        print(Fore.RED + "Summary of errors:")
-        for err in errors:
-            print(err)
-    
-    return user_page_data
-
-
-
-#gather all entry on index and info from its /view
-def scrape_index_page(base_url="https://nyaa.si/?p=", page_traversed=5):
-    flatened_data = []
-    for i in range(1,page_traversed+1):
-        main_page_html = get_html_content(f"{base_url}{i}")
-        table_row_elements = get_rows_element(main_page_html,'tbody tr')
-        flatened_data += extract_nyaa_table_data(table_row_elements)
-        line_print(Back.GREEN,f"{base_url}{i} data successfully scraped")
-        time.sleep(1)
-    df = pd.DataFrame(flatened_data)
-    print(df.head(100))
 
 def line_print(bg_color, text,end='\n\n'):
     print(bg_color + Style.BRIGHT  + text, end=end)
@@ -183,7 +43,7 @@ def add_next_page_url(url, max_page, page=None):
     
     # Get current page number or default to 1
     current_page = int(query_dict.get('p', ['1'])[0])
-    if current_page >= max_page:
+    if current_page > max_page:
         return None
 
     if page:
@@ -225,18 +85,6 @@ def get_url_path(url, segment = None):
     except Exception:
         line_print(Back.RED , f"url is {url}")
         return False
-    
-def scrape_nyaa_with_query(query=None,filter=None,category=None,page_traverse = 3):
-    flatened_data = []
-    for i in range(1,page_traverse+1):
-        nyaa_url = generate_nyaa_url(query=query, filter=filter, page=i, category=category)
-        page_html = get_html_content(nyaa_url)
-        table_row_elements = get_rows_element(page_html, 'tbody tr')
-        flatened_data += extract_nyaa_table_data(table_row_elements)
-        line_print(Back.GREEN,f"{nyaa_url} data successfully scraped")
-        time.sleep(1)
-    df = pd.DataFrame(flatened_data)
-    print(df.head(100))
 
 def safe_parse_int(value):
     try:
@@ -328,7 +176,7 @@ class AsyncCrawler:
         self.page_data[url_to_crawl] = None
 
         async with self.semaphore:
-            html = await self. get_html(url_to_crawl)
+            html = await self.get_html(url_to_crawl)
             if html is None:
                 self.errors.append(f"failed to fetch html content, url : {url_to_crawl}")
                 line_print(Back.RED, f"failed to fetch html content, url : {url_to_crawl}")
@@ -357,27 +205,10 @@ class AsyncCrawler:
             task = asyncio.create_task(self.extract_table_page(url, i))
             self.page_tasks[i] = task
             tasks.append(task)
+            print(Fore.GREEN + f"Added task to crawl {url}")
         await asyncio.gather(*tasks, return_exceptions=True)
-        return self.page_data
 
-    # async def get_html_with_stop(self,url):
-    #     await asyncio.sleep(0.2)
-    #     try:
-    #         async with self.session.get(url) as response: # type: ignore
-    #             print(response.status)
-    #             if response.status != 200:
-    #                 print(f"Error: Status {response.status} for {url}")
-    #                 self.errors.append(f"Error: Status {response.status} for {url}")
-    #                 return None
-    #             if 'text/html' not in response.headers.get('Content-Type', ''):
-    #                 print(f"Non-HTML content for {url}")
-    #                 self.errors.append(f"Non-HTML content for {url}")
-    #                 return None
-    #             return await response.text()   
-    #     except aiohttp.ClientError as e:
-    #             print(f"Error fetching {url}: {e}")
-    #             self.errors.append(f"Error fetching {url}: {e}")
-    #             return None
+        line_print(Back.GREEN, f"Finish crawling {self.base_url} with max_dept of {self.max_page} pages")
 
     async def custom_crawl(self):
         await self.crawl_custom_query()
@@ -456,7 +287,7 @@ class AsyncCrawler:
                     task = asyncio.create_task(self.crawl_page(view_url))
                     tasks.append(task)
                     ctr +=1
-                    if(ctr > 6):
+                    if(ctr > 5):
                         break
 
             next_page_url = add_next_page_url(self.base_url, self.max_page)
@@ -486,13 +317,15 @@ class AsyncCrawler:
 
     async def crawl(self):
         await self.crawl_page(self.base_url)
+        line_print(Back.GREEN, f"Finish crawling {self.base_url} with max_dept of {self.max_page} pages")
         return self.page_data
 
 
-async def crawl_site_async(base_url):
-    async with AsyncCrawler(base_url,max_concurrency=2) as crawler:
+async def crawl_site_async(base_url, max_pages):
+    async with AsyncCrawler(base_url,max_concurrency=3, max_page_traverse=max_pages) as crawler:
         line_print(Back.GREEN, f"Starting webcrawling with base url : {base_url}")
         page_data = await crawler.crawl()
+        
         # 
         line_print(Back.RED , "Here are the error that occured during crawling : ")
         for error in crawler.errors:
@@ -500,22 +333,10 @@ async def crawl_site_async(base_url):
         # 
         return page_data
 
-async def main_async_crawl():
-    base_url = "https://nyaa.si"
-    page_datas = await crawl_site_async(base_url)
-
-    nyaa_csv_report.write_csv_report(page_datas,"nyaa-report.csv")
-
-    # for key,values in page_datas.items():
-    #     line_print(Back.BLUE,key,end='\n')
-    #     for value in values:
-    #         print(value)
-    #     print()
-
-async def crawl_site_with_query(base_url):
-    async with AsyncCrawler(base_url,max_concurrency=2) as crawler:
+async def crawl_site_with_query(base_url, max_pages):
+    async with AsyncCrawler(base_url,max_concurrency=3, max_page_traverse=max_pages) as crawler:
         line_print(Back.GREEN, f"Starting webcrawling with base url : {base_url}")
-        page_data = await crawler.crawl_custom_query()
+        page_data = await crawler.custom_crawl()
         # 
         line_print(Back.RED , "Here are the error that occured during crawling : ")
         for error in crawler.errors:
@@ -523,16 +344,70 @@ async def crawl_site_with_query(base_url):
         # 
         return page_data
 
-async def custom_async_crawl():
-    base_url = "https://nyaa.si/?f=0&c=1_2&q=bocchi+the+rock"
-    page_datas = await crawl_site_with_query(base_url)
+def parse_argument():
+# Create an ArgumentParser object
+    parser = argparse.ArgumentParser(
+        description='''A script to crawl and gather data from nyaa :)'''
+    )
 
-    for key,values in page_datas.items():
-        line_print(Back.BLUE,key,end='\n')
+    parser.add_argument("-u", "--url", type=str,required=False,default="https://nyaa.si",help="The URL to gather pages of data from nyaa (e.g.,https://nyaa.si/?f=0&c=1_2&q=bocchi+the+rock )")
+    parser.add_argument("-p","--pages", type=int,default=1,required=False,help="Number of pages to process (default: 1)")
+    parser.add_argument("-o","--output", type=str,choices=["terminal", "file", "both"], default="both",help="Output method: terminal, csv, or both (default: terminal)")
+
+    args, unknown = parser.parse_known_args()
+    
+    # Check if -u or --url was provided in the command line
+    url_provided = any(arg in sys.argv for arg in ["-u", "--url"])
+    
+    return args, url_provided
+
+def display_data_with_panda(data:dict):
+    line_print(Back.CYAN,"Here are the crawled data")
+    result = []
+    for key,values in data.items():
         for value in values:
-            print(value)
-        print()
+            result.append(
+                {
+                    "page_url": key,
+                    "category": value.get("category", ""),
+                    "file_name": value.get("file_name", ""),
+                    "link": value.get("link", ""),
+                    "magnet_link": value.get("magnet_link", ""),
+                    "size": value.get("size", ""),
+                    "date": value.get("date", ""),
+                    "seeders": value.get("seeders", 0),
+                    "leechers": value.get("leechers", 0),
+                    "completed_download": value.get("completed_download", 0)
+                }
+            )
+    df = pd.DataFrame(result)
+    print(df.head(250))
+
+    
 
 if __name__ == "__main__":
-    asyncio.run(custom_async_crawl())
-    # print(add_next_page_url("https://nyaa.si/?f=0&c=0_0&q=xcvdvdv", 5))
+    # asyncio.run(crawl_site_with_query("https://nyaa.si/?f=0&c=1_2&q=bocchi+the+rock", 2))
+    args, url_provided = parse_argument()
+    print(args)
+    crawl_datas = None
+    if url_provided:
+        print("custom query")
+        crawl_datas = asyncio.run(crawl_site_with_query(args.url,args.pages))
+    else:
+        print("basic index")
+        crawl_datas = asyncio.run(crawl_site_async(args.url, args.pages))
+
+    if crawl_datas is None:
+        line_print(Back.RED, "Failed to fetch data")
+        exit() 
+    
+    today = datetime.today().strftime("%Y%m%d")
+    if args.output == "both":
+        display_data_with_panda(crawl_datas)
+        name = nyaa_csv_report.write_csv_report(crawl_datas,f"custom-nyaa-report-{today}.csv")
+        print(Fore.GREEN + f"data is store on file {name}")
+    elif args.output == "csv":
+        name = nyaa_csv_report.write_csv_report(crawl_datas,f"nyaa-report-{today}.csv")
+        print(Fore.GREEN + f"data is store on file {name}")
+    else:
+        display_data_with_panda(crawl_datas)

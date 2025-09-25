@@ -19,3 +19,4 @@ def write_csv_report(page_datas : dict, filename="report.csv"):
                     "leechers": value.get("leechers", 0),
                     "completed_download": value.get("completed_download", 0)
                 })
+    return filename
