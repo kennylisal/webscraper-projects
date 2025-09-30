@@ -103,7 +103,7 @@ The script displays results in a Pandas DataFrame for easy viewing. Here's an ex
 
 If `--output` is set to `file` or `both`, results are saved to a timestamped CSV file (e.g., `nyaa-report-20250929.csv` or `custom-nyaa-report-20250929.csv`). The file includes columns like `page_url`, `category`, `file_name`, `link`, `magnet_link`, `size`, `date`, `seeders`, `leechers`, and `completed_download`.
 
-## How It Works
+### How It Works
 
 1. **Argument Parsing**: Uses `argparse` to handle CLI inputs.
 2. **URL Generation**: Builds Nyaa URLs dynamically based on query or latest mode.
@@ -112,7 +112,7 @@ If `--output` is set to `file` or `both`, results are saved to a timestamped CSV
 5. **Pagination and Navigation**: Automatically handles next pages and follows view/user links up to the max depth.
 6. **Output**: Displays via Pandas in terminal and/or exports to CSV.
 
-## Limitations
+### Limitations
 
 - **Rate Limiting**: Nyaa.si may block excessive requests; the script includes a small delay (0.2s) but use responsibly to avoid IP bans.
 - **Concurrency**: Limited to 3 simultaneous requests by default to prevent overload; adjust on the paramater code if needed.
