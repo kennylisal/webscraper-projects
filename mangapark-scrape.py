@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode, quote
 from requests_html import HTMLSession,AsyncHTMLSession
 from playwright.async_api import async_playwright
+from colorama import init, Fore, Back, Style
+
 
 def generate_mangapark_url(query=None,page=None,path=''):
     scheme = 'https'
@@ -21,104 +23,188 @@ def generate_mangapark_url(query=None,page=None,path=''):
 
     return new_url
 
-# this will return list of title and link from query (default : 5 title)
-async def get_manga_titles(query):
-    try:
-        url = generate_mangapark_url(query=query,path='search')
-        # print(f"search url : {url}")
-        html = await get_html(url)
-        soup = BeautifulSoup(html,'lxml')
-        title_elements = soup.select('div[q\\:key="jp_1"] h3 a') # type: ignore
-        # 
-        result = []
-        for title_element in title_elements:
-            obj = {
-                title_element.get_text(strip=True) : generate_mangapark_url(path=title_element['href']) # type: ignore
-            }
-            # print(obj)
-            result.append(obj)
-        return result
-    except Exception as e:
-        raise e
 
-#get html from an url
-async def get_html(url):
-    session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
-    try:
-        async with session.get(url) as response: # type: ignore
-            if response.status != 200:
-                print(f"Error: Status {response.status} for {url}")
-                raise Exception(f"Error: Status {response.status} for {url}")
-            if 'text/html' not in response.headers.get('Content-Type', ''):
-                print(f"Non-HTML content for {url}")
-                raise Exception(f"Non-HTML content for {url}")
-            return await response.text()   
-    except aiohttp.ClientError as e:
-            print(f"Error fetching {url}: {e}")
+def line_print(bg_color, text,end='\n\n'):
+    print(bg_color + Style.BRIGHT  + text, end=end)
+
+class AsyncScraper:
+    def __init__(self, query:str, max_concurrency:int):
+        self.page_datas = {}
+        self.search_query = query
+        self.lock = asyncio.Lock()
+        self.semaphore = asyncio.Semaphore(max_concurrency)
+        self.errors = []
+    
+    async def __aenter__(self):
+        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.session is not None:
+            await self.session.close()
+
+    # this will return list of title and link from query (default : 5 title)
+    async def get_manga_titles(self,query):
+        try:
+            url = generate_mangapark_url(query=query,path='search')
+            # print(f"search url : {url}")
+            html = await self.get_html(url)
+            soup = BeautifulSoup(html,'lxml')
+            title_elements = soup.select('div[q\\:key="jp_1"] h3 a') # type: ignore
+            # 
+            result = []
+            for title_element in title_elements:
+                obj = {
+                    title_element.get_text(strip=True) : generate_mangapark_url(path=title_element['href']) # type: ignore
+                }
+                # print(obj)
+                result.append(obj)
+            return result
+        except Exception as e:
             raise e
-    finally:
-        await session.close()
 
-# get list of volumes from a title 
-async def get_list_of_volume(url):
-    try:
-        html = await get_html(url)
-        soup = BeautifulSoup(html,'lxml')
-        table_datas = soup.select('a.link-hover.link-primary.visited\\:text-accent')
-        list_of_volume = {}
-        for data in table_datas:
-            list_of_volume[data.get_text(strip=True)] = data['href']
-        # print(list_of_volume)
-        return list_of_volume
-    except Exception:
-        print(f"Element of manga volume is not exist on {url}")
+    #get html from an url
+    async def get_html(self,url):
+        session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        try:
+            async with session.get(url) as response: # type: ignore
+                if response.status != 200:
+                    print(f"Error: Status {response.status} for {url}")
+                    raise Exception(f"Error: Status {response.status} for {url}")
+                if 'text/html' not in response.headers.get('Content-Type', ''):
+                    print(f"Non-HTML content for {url}")
+                    raise Exception(f"Non-HTML content for {url}")
+                return await response.text()   
+        except aiohttp.ClientError as e:
+                print(f"Error fetching {url}: {e}")
+                raise e
+        finally:
+            await session.close()
 
-# extract all link from manga page
-async def get_chapter_data(url, max_retries = 5):
-    max_retries = max_retries
-    for i in range(0, max_retries):
-        browser = None
-        async with async_playwright() as p:
+    # get list of volumes from a title 
+    async def get_list_of_volume(self,url):
+        try:
+            html = await self.get_html(url)
+            soup = BeautifulSoup(html,'lxml')
+            table_datas = soup.select('a.link-hover.link-primary.visited\\:text-accent')
+            list_of_volume = {}
+            for data in table_datas:
+                list_of_volume[data.get_text(strip=True)] = data['href']
+            # print(list_of_volume)
+            return list_of_volume
+        except Exception:
+            # print(f"Element of manga volume is not exist on {url}")
+            raise Exception(f"Element of manga volume is not exist on {url}")
+
+    # # extract all link from manga page
+    # async def get_chapter_data(self,url, max_retries = 5):
+    #     max_retries = max_retries
+    #     for i in range(0, max_retries):
+    #         browser = None
+    #         async with async_playwright() as p:
+    #             try:
+    #                 browser = await p.chromium.launch(headless=True)
+    #                 page = await browser.new_page()
+    #                 await page.goto(url)
+
+    #                 # we could use for wait an element to appear or
+    #                 # Alternatively, wait for network to be idle (no requests for 500ms)
+    #                 # await page.wait_for_load_state('networkidle')
+    #                 await page.wait_for_selector('div[data-name="image-item"]', timeout=8000)
+
+    #                 html = await page.content()
+                    
+    #                 soup = BeautifulSoup(html, 'lxml')
+    #                 main = soup.find('main')
+    #                 img_urls = [img['src'] for img in main.find_all('img')] # type: ignore
+    #                 # print(img_urls) 
+    #                 return img_urls
+    #             except TimeoutError as e:
+    #                 print(f"attemp {i + 1} timed out, trying again to render : {url}")
+    #                 await asyncio.sleep(1)
+    #             except Exception:
+    #                 print(f"unexpected error on attemp {i + 1} on {url}")
+    #                 await asyncio.sleep(1)
+    #             finally:
+    #                 if browser is not None:
+    #                     await browser.close()
+        
+    #     raise Exception(f"failed to load {url} after {max_retries} tries")
+    
+        # extract all link from manga page
+    async def get_chapter_data(self,url, max_retries = 5):
+        for i in range(0, max_retries):
             try:
+                async with self.semaphore:
+                    html = await self.render_and_get_html(url,i)
+                soup = BeautifulSoup(html, 'lxml') # type: ignore
+                main = soup.find('main')
+                img_urls = [img['src'] for img in main.find_all('img')] # type: ignore
+                # print(img_urls) 
+                return img_urls
+            except Exception:
+                print(f"unexpected error on attemp {i + 1} on {url}")
+                await asyncio.sleep(1)
+    
+        raise Exception(f"failed to load {url} after {max_retries} tries")
+
+    async def render_and_get_html(self, url, counter):
+        browser = None
+        try:
+            async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 page = await browser.new_page()
                 await page.goto(url)
-
                 # we could use for wait an element to appear or
                 # Alternatively, wait for network to be idle (no requests for 500ms)
                 # await page.wait_for_load_state('networkidle')
                 await page.wait_for_selector('div[data-name="image-item"]', timeout=8000)
 
                 html = await page.content()
-                
-                soup = BeautifulSoup(html, 'lxml')
-                main = soup.find('main')
-                img_urls = [img['src'] for img in main.find_all('img')] # type: ignore
-                # print(img_urls) 
-                return img_urls
-            except TimeoutError as e:
-                print(f"attemp {i + 1} timed out, trying again to render : {url}")
-                await asyncio.sleep(1)
-            except Exception:
-                print(f"unexpected error on attemp {i + 1} on {url}")
-                await asyncio.sleep(1)
-            finally:
-                if browser is not None:
-                    await browser.close()
-    
-    raise Exception(f"failed to load {url} after {max_retries} tries")
+                return html
+        except TimeoutError as e:
+            print(f"attemp {counter + 1} timed out, trying again to render : {url}")
+            await asyncio.sleep(1)
+        except Exception:
+            print(f"unexpected error on attemp {counter + 1} on {url}")
+            await asyncio.sleep(1)
+        finally:
+            if browser is not None:
+                await browser.close()        
+
+    async def scrape_chapter_page(self, chapter_name,url_path):
+        try:
+            chapter_url = generate_mangapark_url(url_path)
+            chapter_data = self.get_chapter_data(chapter_url)
+            async with self.lock:
+                self.page_datas[chapter_name] = chapter_data
+        except Exception:
+            raise Exception(f"error when trying to scrape{url_path}")
+
+
+    async def start_scrape(self):
+        search_url : list[dict] = await self.get_manga_titles(self.search_query)
+        main_url = list(search_url[0].values())[0] 
+        # print(main_url)
+        list_of_volume = await self.get_list_of_volume(main_url)
+        # disini bikin asyncio task
+        async_tasks = []
+        for key,value in list_of_volume:
+            new_task = asyncio.create_task(self.scrape_chapter_page(key,value))
+            async_tasks.append(new_task)
+        await asyncio.gather(*async_tasks)
+        return self.page_datas
+        # path = list(list_of_volume.values())[0] # type: ignore
+        # chapter_url = generate_mangapark_url(path=path) # type: ignore
+        # # print(chapter_url)
+        # final_res = await self.get_chapter_data(chapter_url)
+        # print(final_res)
+
 
 
 async def main():
-    search_url : list[dict] = await get_manga_titles("domestic na")
-    main_url = list(search_url[0].values())[0] 
-    # print(main_url)
-    list_of_volume = await get_list_of_volume(main_url)
-    path = list(list_of_volume.values())[0] # type: ignore
-    chapter_url = generate_mangapark_url(path=path) # type: ignore
-    # print(chapter_url)
-    final_res = await get_chapter_data(chapter_url)
-    print(final_res)
+    async with AsyncScraper("domestic na", 5) as scraper:
+        result = await scraper.start_scrape()
 
 
 if __name__ == "__main__":
