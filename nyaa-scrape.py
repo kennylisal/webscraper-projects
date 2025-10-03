@@ -6,7 +6,6 @@ import asyncio
 import aiohttp
 import nyaa_csv_report 
 import argparse
-import sys
 from datetime import datetime
 
 init(autoreset=True)
