@@ -93,33 +93,36 @@ def safe_parse_int(value):
         return 0
 
 def extract_nyaa_table_info(html):
-    soup = BeautifulSoup(html,'lxml')
-    #check if no result first
-    if soup.find('h3',string='No results found'):
-        return None
-    # 
-    content_element = soup.select('tbody tr')
-    if content_element == None:
-        line_print(Back.RED,"Data Element is not rendered")
-        return None
-    table_rows = content_element
-    #
-    data_collection = []
-    for row in table_rows:
-        cells = row.select('td')
-        temp_data = {
-            'category' : cells[0].find('a').get('title'), # type: ignore
-            'file_name' : cells[1].get_text(strip=True),
-            'link' : cells[1].find('a').get('href'), # type: ignore
-            'magnet_link' : cells[2].find_all('a')[1].get('href'), # type: ignore
-            'size' : cells[3].get_text(strip=True),
-            'date' : cells[4].get_text(strip=True),
-            'seeders' : safe_parse_int(cells[5].get_text(strip=True)),
-            'leechers' : safe_parse_int(cells[6].get_text(strip=True)),
-            'completed_download' : safe_parse_int(cells[7].get_text(strip=True))
-        }
-        data_collection.append(temp_data)
-    return data_collection
+    try:
+        soup = BeautifulSoup(html,'lxml')
+        #check if no result first
+        if soup.find('h3',string='No results found'):
+            raise Exception("no table data found")
+        # 
+        content_element = soup.select('tbody tr')
+        if content_element == None:
+            line_print(Back.RED,"Data Element is not rendered")
+            raise Exception("Data Element is not rendered")
+        table_rows = content_element
+        #
+        data_collection = []
+        for row in table_rows:
+            cells = row.select('td')
+            temp_data = {
+                'category' : cells[0].find('a').get('title'), # type: ignore
+                'file_name' : cells[1].get_text(strip=True),
+                'link' : cells[1].find('a').get('href'), # type: ignore
+                'magnet_link' : cells[2].find_all('a')[1].get('href'), # type: ignore
+                'size' : cells[3].get_text(strip=True),
+                'date' : cells[4].get_text(strip=True),
+                'seeders' : safe_parse_int(cells[5].get_text(strip=True)),
+                'leechers' : safe_parse_int(cells[6].get_text(strip=True)),
+                'completed_download' : safe_parse_int(cells[7].get_text(strip=True))
+            }
+            data_collection.append(temp_data)
+        return data_collection
+    except Exception as e:
+        raise e
 
 def get_submitter_info_from_view(html):
     try:
@@ -132,22 +135,32 @@ def get_submitter_info_from_view(html):
         return None
 
 def get_user_link_from_view(html):
-    submitter = get_submitter_info_from_view(html)
-    if submitter is None:
-        line_print(Back.BLUE, "submitter is Anonymous, Skipped")
-        return None
-    submitter_url = submitter.get("href") # type: ignore
-    return submitter_url
+    try:
+        submitter = get_submitter_info_from_view(html)
+        if submitter is None:
+            line_print(Back.BLUE, "submitter is Anonymous, Skipped")
+            raise Exception("submitter is Anonymous, Skipped")
+        submitter_url = submitter.get("href") # type: ignore
+        if submitter_url is None:
+            raise Exception("submitter_URL isn't available")
+        return submitter_url
+    except Exception as e:
+        raise e
 
     
 def extract_nyaa_page_data(html,page_url):
-    #kembalikan data -> sesuai jika dia index, /user, /view
-    if get_url_path(page_url,0) == '' or get_url_path(page_url,0) == '/' or get_url_path(page_url,0) == '/user':
-        return extract_nyaa_table_info(html)
-    elif get_url_path(page_url,0) == '/view':
-        return get_user_link_from_view(html)
-    line_print(Back.YELLOW, f"path outside of scope encountered, url : {page_url}")
-    return None
+    try:
+        #kembalikan data -> sesuai jika dia index, /user, /view
+        if get_url_path(page_url,0) == '' or get_url_path(page_url,0) == '/' or get_url_path(page_url,0) == '/user':
+            return extract_nyaa_table_info(html)
+        elif get_url_path(page_url,0) == '/view':
+            return get_user_link_from_view(html)
+        else:
+            message = f"path outside of scope encountered, url : {page_url}"
+            line_print(Back.YELLOW, message)
+            raise Exception(message)
+    except Exception as e:
+        raise(e)
 
 
 
@@ -164,7 +177,7 @@ class AsyncScraper:
         self.page_tasks = {}
 
     async def __aenter__ (self):
-        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -214,15 +227,18 @@ class AsyncScraper:
         return self.page_data
     
     async def add_page_visit(self,url_destination):
-        if get_url_path(url_destination, 0) == '/view':
-            return True
-        async with self.lock:
-            if url_destination in self.page_data:
-                self.errors.append(f"url {url_destination} is already on page_data, Skipped!")
-                return False
-            print(Fore.GREEN + f"added to page_data {url_destination}")
-            self.page_data[url_destination] = None
-            return True
+        try:
+            if get_url_path(url_destination, 0) == '/view':
+                return
+            async with self.lock:
+                if url_destination in self.page_data:
+                    raise Exception(f"url {url_destination} is already on page_data, Skipped!")
+                print(Fore.GREEN + f"added to page_data {url_destination}")
+                self.page_data[url_destination] = None
+                return 
+        except Exception as e:
+            self.errors.append(e)
+            raise(e)
         
     async def get_html(self,url):
         await asyncio.sleep(0.2)
@@ -243,76 +259,78 @@ class AsyncScraper:
                 return None
         
     async def crawl_page(self,url_to_crawl):
-        line_print(Back.BLUE, f"start crawling for {url_to_crawl}")
-        is_new = await self.add_page_visit(url_to_crawl)
-        if not is_new:
-            return
+        try:
+            line_print(Back.BLUE, f"start crawling for {url_to_crawl}")
+            await self.add_page_visit(url_to_crawl)
+
+            
+            #limit concurency
+            async with self.semaphore:
+                print(Fore.GREEN + f"fetching html from : {url_to_crawl}")
+                html = await self.get_html(url_to_crawl)
+                if html is None:
+                    self.errors.append(f"failed to fetch html content, url : {url_to_crawl}")
+                    line_print(Back.RED, f"failed to fetch html content, url : {url_to_crawl}")
+                    async with self.lock:
+                        del self.page_data[url_to_crawl]
+                    return
+            
+            # page_info -> isinya link yang mau dikunjungi
+            page_info = extract_nyaa_page_data(html,url_to_crawl)
         
-        #limit concurency
-        async with self.semaphore:
-            print(Fore.GREEN + f"fetching html from : {url_to_crawl}")
-            html = await self.get_html(url_to_crawl)
-            if html is None:
-                self.errors.append(f"failed to fetch html content, url : {url_to_crawl}")
-                line_print(Back.RED, f"failed to fetch html content, url : {url_to_crawl}")
+
+
+            if get_url_path(url_to_crawl,segment=0) == '' or get_url_path(url_to_crawl,segment=0) == '/':
                 async with self.lock:
-                    del self.page_data[url_to_crawl]
-                return
-        
-        # page_info -> isinya link yang mau dikunjungi
-        page_info = extract_nyaa_page_data(html,url_to_crawl)
-        if page_info is None:
-            return
+                    nyaa_path = url_to_crawl
+                    self.page_data[nyaa_path] = page_info
 
+                new_urls = []
+                for item in page_info:
+                    try:
+                        new_urls.append(item['link']) # type: ignore
+                    except:
+                        continue
 
-        if get_url_path(url_to_crawl,segment=0) == '' or get_url_path(url_to_crawl,segment=0) == '/':
-            async with self.lock:
-                nyaa_path = url_to_crawl
-                self.page_data[nyaa_path] = page_info
+                tasks = []
+                line_print(Back.GREEN, f"adding task to crawl links from {url_to_crawl}")
+                ctr = 0
+                for url in new_urls:
+                    if generate_nyaa_url() == self.base_url:
+                        view_url = generate_nyaa_url(path=url)
+                        task = asyncio.create_task(self.crawl_page(view_url))
+                        tasks.append(task)
+                        ctr +=1
+                        if(ctr > 5):
+                            break
 
-            new_urls = []
-            for item in page_info:
-                try:
-                    new_urls.append(item['link']) # type: ignore
-                except:
-                    continue
+                next_page_url = add_next_page_url(self.base_url, self.max_page)
 
-            tasks = []
-            line_print(Back.GREEN, f"adding task to crawl links from {url_to_crawl}")
-            ctr = 0
-            for url in new_urls:
-                if generate_nyaa_url() == self.base_url:
-                    view_url = generate_nyaa_url(path=url)
-                    task = asyncio.create_task(self.crawl_page(view_url))
-                    tasks.append(task)
-                    ctr +=1
-                    if(ctr > 5):
-                        break
+                if next_page_url:
+                    next_page_task = asyncio.create_task(self.crawl_page(next_page_url))
+                    tasks.append(next_page_task)
+                    print(Fore.GREEN, f"Added task to crawl {next_page_task}",end='\n')   
 
-            next_page_url = add_next_page_url(self.base_url, self.max_page)
-
-            if next_page_url:
-                next_page_task = asyncio.create_task(self.crawl_page(next_page_url))
-                tasks.append(next_page_task)
-                print(Fore.GREEN, f"Added task to crawl {next_page_task}",end='\n')   
-
-            print(Fore.GREEN + f"Added {len(tasks)} url to crawl")
-            await asyncio.gather(*tasks)
-        elif get_url_path(url_to_crawl,segment=0) == '/view':
-            user_path = page_info
-            user_url = generate_nyaa_url(path=user_path) # type: ignore
-            print(Fore.GREEN, f"Continuing from {url_to_crawl} to {user_url}",end='\n')
-            line_print(Back.GREEN, f"added task to crawl {user_url}")
-            await asyncio.gather(*[asyncio.create_task(self.crawl_page(user_url))])
-        elif get_url_path(url_to_crawl,segment=0) == '/user': #this is for '/user'
-            async with self.lock:
-                nyaa_path = url_to_crawl
-                self.page_data[nyaa_path] = page_info
-            next_page_url = add_next_page_url(url_to_crawl, self.max_page)
-            if next_page_url:                    
-                print(Fore.GREEN, f"Continuing from {url_to_crawl} to {next_page_url}",end='\n')
-                line_print(Back.GREEN, f"added task to crawl {next_page_url}")
-                await asyncio.gather(*[asyncio.create_task(self.crawl_page(next_page_url))])
+                print(Fore.GREEN + f"Added {len(tasks)} url to crawl")
+                await asyncio.gather(*tasks)
+            elif get_url_path(url_to_crawl,segment=0) == '/view':
+                user_path = page_info
+                user_url = generate_nyaa_url(path=user_path) # type: ignore
+                print(Fore.GREEN, f"Continuing from {url_to_crawl} to {user_url}",end='\n')
+                line_print(Back.GREEN, f"added task to crawl {user_url}")
+                await asyncio.gather(*[asyncio.create_task(self.crawl_page(user_url))])
+            elif get_url_path(url_to_crawl,segment=0) == '/user': #this is for '/user'
+                async with self.lock:
+                    nyaa_path = url_to_crawl
+                    self.page_data[nyaa_path] = page_info
+                next_page_url = add_next_page_url(url_to_crawl, self.max_page)
+                if next_page_url:                    
+                    print(Fore.GREEN, f"Continuing from {url_to_crawl} to {next_page_url}",end='\n')
+                    line_print(Back.GREEN, f"added task to crawl {next_page_url}")
+                    await asyncio.gather(*[asyncio.create_task(self.crawl_page(next_page_url))])
+        except Exception as e:
+            self.errors.append(e)
+            raise(e)
 
     async def crawl(self):
         await self.crawl_page(self.base_url)
