@@ -330,7 +330,7 @@ class AsyncScraper:
                     await asyncio.gather(*[asyncio.create_task(self.crawl_page(next_page_url))])
         except Exception as e:
             self.errors.append(e)
-            raise(e)
+            # raise(e)
 
     async def crawl(self):
         await self.crawl_page(self.base_url)

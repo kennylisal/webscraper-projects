@@ -184,7 +184,8 @@ class AsyncScraper:
             await asyncio.gather(*async_tasks)
             return self.page_datas
         except Exception as e:
-            raise(e)
+            # raise(e)
+            self.errors.append(e)
     
     async def testing_ground(self):
         result = await self.scrape_chapter_page("chaprt1","/title/54184-en-domestic-girlfriend/2469848-ch-277")
