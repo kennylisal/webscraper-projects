@@ -201,7 +201,7 @@ def get_and_check_index(number, number_of_element):
     except ValueError:
         raise Exception("Input suppose to be a number")
 
-async def main():
+async def run_scraper():
     async with AsyncScraper("domestic na", 5) as scraper:
         try:
             query = input("Enter your search query: ").strip()
@@ -221,7 +221,8 @@ async def main():
         except Exception as e:
             raise(e)
 
-    
+def main_scraper():
+    asyncio.run(run_scraper())
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_scraper())
