@@ -15,6 +15,11 @@ def nyaa_scraper(query, pages : int, output, latest):
     from nyaa.main import run_scraper
     run_scraper(query, pages, output, latest)
 
+@cli.command()
+def mangapark_scraper():
+    """Run mangapark-scraper"""
+    from mangapark.main import main_scraper
+    main_scraper()
 
 if __name__ == "__main__":
     cli()
